@@ -22,7 +22,7 @@
     !defined(BSP_USING_UART4) && !defined(BSP_USING_UART5) && !defined(BSP_USING_UART6) && \
     !defined(BSP_USING_UART7) && !defined(BSP_USING_UART8) && !defined(BSP_USING_LPUART1)
     #error "Please define at least one BSP_USING_UARTx"
-    /* this driver can be disabled at menuconfig → RT-Thread Components → Device Drivers */
+    /* this driver can be disabled at menuconfig -> RT-Thread Components -> Device Drivers */
 #endif
 
 #ifdef RT_SERIAL_USING_DMA
@@ -749,6 +749,12 @@ static void stm32_dma_config(struct rt_serial_device *serial, rt_ubase_t flag)
         /* enable DMA clock && Delay after an RCC peripheral clock enabling*/
         SET_BIT(RCC->AHB1ENR, dma_config->dma_rcc);
         tmpreg = READ_BIT(RCC->AHB1ENR, dma_config->dma_rcc);
+
+#if (defined(SOC_SERIES_STM32L4) || defined(SOC_SERIES_STM32G4)) && defined(DMAMUX1)
+        /* enable DMAMUX clock for L4+ and G4 */
+        __HAL_RCC_DMAMUX1_CLK_ENABLE();
+#endif
+
 #endif
         UNUSED(tmpreg);   /* To avoid compiler warnings */
     }
@@ -870,12 +876,36 @@ void HAL_UART_RxHalfCpltCallback(UART_HandleTypeDef *huart)
     uart = (struct stm32_uart *)huart;
     dma_isr(&uart->serial);
 }
+
+static void _dma_tx_complete(struct rt_serial_device *serial)
+{
+    struct stm32_uart *uart;
+    rt_size_t trans_total_index;
+    rt_base_t level;
+
+    RT_ASSERT(serial != RT_NULL);
+    uart = rt_container_of(serial, struct stm32_uart, serial);
+
+    if ((__HAL_DMA_GET_IT_SOURCE(&(uart->dma_tx.handle), DMA_IT_TC) != RESET) ||
+            (__HAL_DMA_GET_IT_SOURCE(&(uart->dma_tx.handle), DMA_IT_HT) != RESET))
+    {
+        level = rt_hw_interrupt_disable();
+        trans_total_index = __HAL_DMA_GET_COUNTER(&(uart->dma_tx.handle));
+        rt_hw_interrupt_enable(level);
+
+        if (trans_total_index == 0)
+        {
+            rt_hw_serial_isr(serial, RT_SERIAL_EVENT_TX_DMADONE);
+        }
+    }
+}
+
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
     struct stm32_uart *uart;
     RT_ASSERT(huart != NULL);
     uart = (struct stm32_uart *)huart;
-    rt_hw_serial_isr(&uart->serial, RT_SERIAL_EVENT_TX_DMADONE);
+    _dma_tx_complete(&uart->serial);
 }
 #endif  /* RT_SERIAL_USING_DMA */
 
